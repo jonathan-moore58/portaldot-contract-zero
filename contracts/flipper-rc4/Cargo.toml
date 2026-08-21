@@ -1,0 +1,54 @@
+[package]
+name = "flipper-rc4"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "ink! 3.0.0-rc4 flipper — the release that matches a mid-2021 pallet-contracts"
+
+[dependencies]
+# PortalDot's pallet-contracts 3.0.0 still has the rent model, which Substrate
+# removed in December 2021. Every ink! 3.x *final* release came after that, so
+# they target a pallet this chain is not. rc4 (2021-07-22) lands a month after
+# this chain's genesis, which makes it the closest match by date.
+ink_primitives = { version = "=3.0.0-rc4", default-features = false }
+ink_metadata = { version = "=3.0.0-rc4", default-features = false, features = ["derive"], optional = true }
+ink_env = { version = "=3.0.0-rc4", default-features = false }
+ink_storage = { version = "=3.0.0-rc4", default-features = false }
+ink_lang = { version = "=3.0.0-rc4", default-features = false }
+
+scale = { package = "parity-scale-codec", version = "=2.3.1", default-features = false, features = ["derive", "full"] }
+scale-info = { version = "=1.0.0", default-features = false, features = ["derive"], optional = true }
+parity-scale-codec-derive = "=2.3.1"
+scale-info-derive = "=1.0.0"
+
+# ink!'s own internal crates are loosely bound to each other too, so the
+# resolver mixes releases and the macro fails against an IR crate from a
+# different version:
+#
+#   error[E0433]: failed to resolve: could not find `InkTrait` in `ink_lang_ir`
+#
+# Same failure mode as the SCALE derive crates. Pin every one of them.
+ink_prelude = { version = "=3.0.0-rc4", default-features = false }
+ink_allocator = { version = "=3.0.0-rc4", default-features = false }
+ink_lang_ir = "=3.0.0-rc4"
+ink_lang_macro = "=3.0.0-rc4"
+ink_lang_codegen = "=3.0.0-rc4"
+ink_storage_derive = "=3.0.0-rc4"
+
+[lib]
+name = "flipper_rc4"
+path = "lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = ["std"]
+std = ["ink_primitives/std", "ink_metadata", "ink_metadata/std", "ink_env/std",
+       "ink_storage/std", "ink_lang/std", "scale/std", "scale-info", "scale-info/std"]
+ink-as-dependency = []
+
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = "z"
+codegen-units = 1
+overflow-checks = false

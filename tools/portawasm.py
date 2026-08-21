@@ -440,9 +440,16 @@ def check(path):
         if local >= len(funcs):
             errors.append("export %r points outside the function space" % e["name"])
             continue
+        # prepare.rs::scan_exports:
+        #   "Both "call" and "deploy" has a () -> () function type.
+        #    We still support () -> (i32) for backwards compatibility."
+        # ink! 3.0-rc entry points return i32, so rejecting that is a false
+        # positive — and a validator that says no when the chain says yes is
+        # worse than no validator at all.
         params, results = types[funcs[local]]
-        if params or results:
-            errors.append("export %r must have signature () -> (), got (%s) -> (%s)"
+        if params or results not in ([], [0x7F]):
+            errors.append("export %r must have signature () -> () or () -> (i32), "
+                          "got (%s) -> (%s)"
                           % (e["name"],
                              ",".join(VALTYPE.get(p, hex(p)) for p in params),
                              ",".join(VALTYPE.get(x, hex(x)) for x in results)))

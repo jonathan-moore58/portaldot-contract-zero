@@ -29,6 +29,9 @@ if (/[\\/](Alice|Bob|Charlie|Dave|Eve|Ferdie)$/.test(SURI) && !SURI.startsWith('
   SURI = `//${SURI.split(/[\\/]/).pop()}`;
 }
 const GAS_LIMIT = BigInt(arg('gas', '200000000000'));
+// Raw contracts (contracts/minimal) ignore input entirely. ink! dispatches on a
+// 4-byte selector, so pass it here: --data 0x633aa551 is flip() on the flipper.
+const DATA = arg('data', '0x');
 
 if (!ADDR) {
   console.error('usage: node scripts/call.mjs --addr <contract> [--dev Alice]');
@@ -50,11 +53,12 @@ async function readFlag() {
 
 console.log(`contract   ${ADDR}`);
 console.log(`caller     ${signer.address}`);
+console.log(`data       ${DATA}`);
 
 const before = await readFlag();
 console.log(`\nstorage before   ${before === null ? '(empty)' : before}`);
 
-const tx = api.tx.contracts.call(ADDR, 0, GAS_LIMIT, '0x');
+const tx = api.tx.contracts.call(ADDR, 0, GAS_LIMIT, DATA);
 console.log('\ncalling…\n');
 
 await new Promise((resolve, reject) => {

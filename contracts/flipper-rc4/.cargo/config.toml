@@ -1,0 +1,15 @@
+# Same three rules as contracts/minimal — ink! output has to satisfy them too.
+# cargo-contract drives its own build, so these are belt and braces: if it
+# overrides RUSTFLAGS, `portawasm check` catches whatever slips through and
+# `portawasm fix` repairs the structural part.
+
+[target.wasm32-unknown-unknown]
+rustflags = [
+  "-C", "target-feature=-sign-ext,-bulk-memory,-nontrapping-fptoint,-reference-types,-multivalue,-simd128",
+  "-C", "link-arg=--import-memory",
+  "-C", "link-arg=--max-memory=1048576",
+  # Rust's default wasm stack is 1 MiB, which is the entire memory budget the
+  # schedule allows (16 pages). Leave it at the default and the linker has no
+  # room left for the data section.
+  "-C", "link-arg=-zstack-size=32768",
+]

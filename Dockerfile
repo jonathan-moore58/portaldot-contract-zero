@@ -36,25 +36,22 @@ WORKDIR /work
 CMD ["cargo", "build", "--release"]
 
 # ------------------------------------------------------------------ ink3 ----
-# ink! 3.0-rc era. Pinned nightly + a frozen dependency set. Do not "cargo
-# update" inside this image: the whole point is that resolution is frozen.
+# Kept for reference only. cargo-contract 0.17 does install here — `--locked`
+# is what makes that work — but it is not the path that ends in a deployable
+# contract, because building a contract resolves the *contract's* dependency
+# graph fresh, and modern transitive crates publish edition-2024 manifests that
+# a 2023 Cargo cannot parse.
+#
+# The working recipe lives in scripts/build-ink.sh and needs no image of its
+# own. See that script for why each piece is there.
 FROM rust:1.69.0-slim AS ink3
 
 ARG INK_NIGHTLY=nightly-2022-08-11
 
-RUN apt-get update \
- && apt-get install -y --no-install-recommends binaryen git pkg-config libssl-dev build-essential \
- && rm -rf /var/lib/apt/lists/*
+RUN apt-get update  && apt-get install -y --no-install-recommends binaryen git pkg-config libssl-dev build-essential  && rm -rf /var/lib/apt/lists/*
 
-RUN rustup toolchain install ${INK_NIGHTLY} --profile minimal \
- && rustup component add rust-src --toolchain ${INK_NIGHTLY} \
- && rustup target add wasm32-unknown-unknown --toolchain ${INK_NIGHTLY}
+RUN rustup toolchain install ${INK_NIGHTLY} --profile minimal  && rustup component add rust-src --toolchain ${INK_NIGHTLY}  && rustup target add wasm32-unknown-unknown --toolchain ${INK_NIGHTLY}
 
-# cargo-contract 0.17 is the last release that targets pallet-contracts 3.0.
-# --locked is essential: it forces the crate's own Cargo.lock, which is exactly
-# the pin that stops the toml_datetime resolution failure.
-RUN cargo install cargo-contract --version 0.17.0 --locked || \
-    echo "NOTE: cargo-contract install failed — see README, use the minimal path"
+RUN cargo install cargo-contract --version 0.17.0 --locked
 
 WORKDIR /work
-CMD ["cargo", "+nightly-2022-08-11", "contract", "build", "--release"]

@@ -90,11 +90,14 @@ Restoring the real ink! toolchain is still worth doing, and is tracked below.
 | `tools/portawasm.py` | Validate and repair WASM against the chain's own rules |
 | `tools/selftest.py` | Proves the validator against hand-built WASM fixtures |
 | `contracts/minimal/` | A contract with zero dependencies, written on `seal0` |
-| `Dockerfile` | Pinned build environments: `minimal`, and `ink3` |
-| `scripts/build-minimal.sh` | Compile, repair, validate |
+| `contracts/flipper-rc4/` | **A working ink! contract** — ink! 3.0.0-rc4 |
+| `contracts/flipper/` | ink! 3.4.0. Compiles and validates, but traps on chain — see below |
+| `scripts/build-minimal.sh` | Compile, repair, validate the raw contract |
+| `scripts/build-ink.sh` | Compile, lower, repair, validate an ink! contract |
 | `scripts/deploy.mjs` | `instantiate_with_code` with legacy `Compact<u64>` gas |
 | `scripts/call.mjs` | Call a contract and read its storage before and after |
 | `scripts/newaccount.mjs` | Generate an account without printing the mnemonic |
+| `Dockerfile` | Build environment for the raw contract |
 
 ### portawasm
 
@@ -109,6 +112,81 @@ specific rule that failed otherwise. `fix` repairs structural problems —
 internal memory, surplus exports, oversized page limits — and deliberately
 leaves instruction-level ones alone. A sign-extension opcode is a compiler
 setting, not something a patcher should paper over.
+
+## Building with ink!
+
+```bash
+bash scripts/build-ink.sh
+node scripts/deploy.mjs --wasm out/ink.wasm --dev Alice \
+     --data 0x9bae9d5e00 --endowment 30 --gas 500000000000
+```
+
+ink! works on PortalDot. Getting there meant clearing four separate walls, each
+of which only becomes visible once the one in front of it is down.
+
+**1 — `cargo-contract` will not install.** The widely reported symptom. The fix
+is `--locked`: without it Cargo re-resolves the crate's transitive dependencies
+to current releases, which no longer build on the toolchain it pins. With it,
+`cargo install cargo-contract --version 0.17.0 --locked` completes.
+
+**2 — the contract's own dependency graph will not resolve.** Building a
+contract resolves *its* dependencies fresh, and modern crates publish
+edition-2024 manifests that a 2023-era Cargo cannot parse:
+
+```
+error: failed to parse the `edition` key
+this version of Cargo is older than the `2024` edition
+```
+
+Pinning crate by crate is whack-a-mole — the graph simply has too many crates
+that have since published an edition-2024 release. What actually works is
+picking a toolchain whose *Cargo* is new enough, which leads to:
+
+**3 — old rustc and new Cargo are both required, and they ship together.**
+`ink_allocator` uses `#![feature(alloc_error_handler, core_intrinsics)]`, so
+stable is out. Modern Cargo is needed for the manifests. Mixing them by pointing
+`RUSTC` at an old toolchain fails, because new Cargo probes rustc with flags it
+does not have (`unknown print request 'split-debuginfo'`).
+
+The resolution is that a window exists where both hold: **`nightly-2025-03-01`**.
+Its Cargo understands edition 2024; its rustc still has the nightly features.
+
+**4 — the emitted WASM is post-MVP.** Modern LLVM turns on five post-MVP
+features by default for `wasm32-unknown-unknown` — `bulk-memory`, `multivalue`,
+`nontrapping-fptoint`, `reference-types`, `sign-ext` — and `wasmi-validation 0.4`
+knows none of them. `-C target-feature=-...` covers your own crates but not the
+precompiled `core`, so `core::slice::copy_from_slice` still emits `memory.copy`.
+Binaryen's `--llvm-memory-copy-fill-lowering` and `--signext-lowering` rewrite
+those into MVP equivalents after the build.
+
+### Which ink! version
+
+**ink! 3.0.0-rc4.** Not the 3.x finals.
+
+PortalDot's `pallet-contracts` 3.0.0 still has the rent model, which Substrate
+removed in December 2021. Every ink! 3.x *final* release came after that, so
+they target a pallet this chain is not.
+
+The evidence is in `contracts/flipper` (ink! 3.4.0): it compiles, and
+`portawasm check` accepts the module, but instantiating it returns
+`ContractTrapped` — with **identical gas consumed for every input, including a
+deliberately invalid selector**. Same gas for all inputs means it traps before
+it ever reads the input, so this is not a dispatch problem; ink! 3.4's startup
+path does not run on this pallet. rc4 (2021-07-22), a month after this chain's
+genesis, runs correctly.
+
+### One thing that bites at every layer
+
+Crates pin their families loosely, so the resolver mixes eras and the build
+breaks in confusing ways:
+
+| Crate | Pulled in | Result |
+|---|---|---|
+| `parity-scale-codec 3.1.5` | `parity-scale-codec-derive 3.7.5` (2025) | `toml_datetime` with edition 2024 |
+| `ink_lang_macro rc4` | a different `ink_lang_ir` | `could not find 'InkTrait' in ink_lang_ir` |
+
+Pinning the parent is never enough. `contracts/flipper-rc4/Cargo.toml` pins
+every derive and internal crate explicitly, and that is the reason it builds.
 
 ## Reference
 
@@ -166,10 +244,12 @@ Source: [`prepare.rs`](https://github.com/portaldotVolunteer/Portaldot/blob/main
 Several PortalDot projects ship contracts that cannot deploy to this runtime.
 The fixes are small, and none of them need a node upgrade.
 
-**Using ink! 4.x or 5.x** — the runtime needs ink! 3.0-rc-era output. Nothing
-built with ink! 4 or 5 will instantiate here, on mainnet or on the dev node.
-Until the `ink3` stage lands, `contracts/minimal` shows the shape of a module
-the chain does accept.
+**Using ink! 4.x or 5.x** — the runtime needs ink! 3.0-rc-era output, and it is
+not the API version number that stops you: ink! 4 and 5 import `seal1`/`seal2`
+host functions, and this runtime's `seal1` contains exactly one function
+(`seal_random`). Moving to ink! 3.0.0-rc4 is a real source change, since ink! 3
+and 4 differ, but it is a version move rather than a rewrite —
+`contracts/flipper-rc4` is a working example with the full pin set.
 
 **Building `WeightV2` gas** — this runtime takes `Compact<u64>`. Build the call
 from chain metadata rather than through `@polkadot/api-contract`; see
@@ -188,25 +268,56 @@ Issues and PRs welcome, including against your repo if that is easier.
 
 ## Verification
 
-First contract deployed and executing on the public dev node:
+Both contracts are deployed and executing on the public dev node.
+
+**Raw `seal0` contract** — `contracts/minimal`
 
 ```
 contract    5DzRGitiPMjRQR9BGL5r6qAeoCm5TA5WnG3CD63b6LVkVpYP
 code_hash   0x33fe817ca2d745df454196acc5b17a1920e1fe617379db57691ee9537eeba0eb
-block       0x73554c992e98d95264213bccf022ae0140024c8e8b0b15aef0e6b41fbb9bfed8
-size        405 bytes
-endowment   20 POT       fee 0.0554 POT
+size        405 bytes        endowment 20 POT     fee 0.0554 POT
 ```
 
-Chain state, read directly from storage:
+**ink! contract** — `contracts/flipper-rc4`
+
+```
+contract    5FpP1cf9Zuc2nwMkNfFirU66UkHrRXHHTaXUGDKyvBSCU22g
+code_hash   0x99dc4425d97c0609823689ca7cf934d5ca63b1dd2cf98e4d29eabde6011d2405
+size        10,885 bytes     endowment 30 POT
+```
+
+Chain state before this work and after:
 
 | | Before | After |
 |---|---|---|
-| `Contracts.PristineCode` | 0 | **1** |
-| `Contracts.ContractInfoOf` | 0 | **1** |
-| Contract storage at key `0x00…00` | `0` | **`1`** after one `contracts.call` |
+| `Contracts.PristineCode` | 0 | **2** |
+| `Contracts.ContractInfoOf` | 0 | **2** |
 
-The last row is the one that matters: it deployed *and* ran.
+And both run, not just deploy:
+
+```
+raw contract   storage at key 0x00…00     0  ->  1   after one contracts.call
+ink! flipper   get()  ->  0x00 (false)
+               flip()                         ExtrinsicSuccess
+               get()  ->  0x01 (true)
+```
+
+## A note on the validator
+
+`portawasm check` initially rejected the working ink! module, insisting entry
+points be `() -> ()`. The chain accepted it anyway. Reading `scan_exports`
+again:
+
+```rust
+// Both "call" and "deploy" has a () -> () function type.
+// We still support () -> (i32) for backwards compatibility.
+```
+
+ink! 3.0-rc entry points return `i32`, so the rule was a false positive, and it
+is fixed. Worth stating plainly, because a validator that says no when the chain
+says yes is worse than no validator at all — it sends people back to believing
+the thing is impossible. Every rule in `portawasm.py` is transcribed from the
+chain's source, and the chain remains the authority.
 
 ## Status
 
@@ -217,8 +328,9 @@ The last row is the one that matters: it deployed *and* ran.
 - [x] Deploy path for the legacy `Compact<u64>` signature
 - [x] Deployed to the public dev node
 - [x] Called, and it changed state
+- [x] **ink! builds, deploys and runs** — ink! 3.0.0-rc4, via `scripts/build-ink.sh`
 - [ ] Mainnet deployment
-- [ ] `ink3` — restore the ink! 3.0-rc toolchain so existing projects build unchanged
+- [ ] Metadata (ABI) generation, so `@polkadot/api-contract` clients can be used
 
 ## License
 

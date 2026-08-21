@@ -1,0 +1,84 @@
+[package]
+name = "flipper"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "ink! 3.x flipper targeting PortalDot's pallet-contracts 3.0.0"
+
+[dependencies]
+# The ink! 3.x line is the one that emits seal0 host calls, which is what
+# pallet-contracts 3.0.0 defines. ink! 4.x and 5.x emit seal1/seal2 imports
+# this runtime has never had — that is the real reason they cannot deploy here,
+# not the contracts API version number.
+ink_primitives = { version = "3.0.0", default-features = false }
+ink_metadata = { version = "3.0.0", default-features = false, features = ["derive"], optional = true }
+ink_env = { version = "3.0.0", default-features = false }
+ink_storage = { version = "3.0.0", default-features = false }
+ink_lang = { version = "3.0.0", default-features = false }
+
+# These two are pinned exactly, and it is not fussiness.
+#
+# Their derive macros depend on proc-macro-crate. Recent proc-macro-crate pulls
+# toml_edit -> toml_datetime, and toml_datetime 1.1.1 declares `edition = 2024`,
+# which a 2023-era Cargo cannot even parse:
+#
+#   error: failed to parse the `edition` key
+#   this version of Cargo is older than the `2024` edition
+#
+# That is the whole of the famous "ink! 3.x is broken on crates.io" problem.
+# It is not a broken crate — it is an unpinned transitive dependency drifting
+# past the toolchain that has to build it.
+#
+# The 2022-era releases below use proc-macro-crate 1.x, which uses toml 0.5 and
+# never reaches toml_datetime at all. Pin the era, not the symptom.
+scale = { package = "parity-scale-codec", version = "=3.1.5", default-features = false, features = ["derive"] }
+scale-info = { version = "=2.1.2", default-features = false, features = ["derive"], optional = true }
+
+# Pinning the two crates above is not enough, and this is the part that catches
+# people out: their derive macros are *separate crates* with their own loose
+# version requirements. parity-scale-codec 3.1.5 accepts any 3.x derive, so the
+# resolver happily picks parity-scale-codec-derive 3.7.5 from 2025, which pulls
+# proc-macro-crate 3.5 -> toml_edit -> toml_datetime 1.1.1. Confirmed with
+# `cargo tree -i toml_datetime`:
+#
+#   proc-macro-crate v3.5.0
+#   └── parity-scale-codec-derive v3.7.5
+#       └── parity-scale-codec v3.1.5
+#
+# These are proc-macro crates, so they run on the host at compile time and add
+# nothing to the deployed WASM. They are listed here purely to hold the
+# resolver in 2022.
+parity-scale-codec-derive = "=3.1.3"
+scale-info-derive = "=2.1.2"
+
+[lib]
+name = "flipper"
+path = "lib.rs"
+crate-type = [
+    # used by cargo-contract for the on-chain module
+    "cdylib",
+    # so the crate can be pulled in as a dependency or unit-tested
+    "rlib",
+]
+
+[features]
+default = ["std"]
+std = [
+    "ink_primitives/std",
+    "ink_metadata",
+    "ink_metadata/std",
+    "ink_env/std",
+    "ink_storage/std",
+    "ink_lang/std",
+    "scale/std",
+    "scale-info",
+    "scale-info/std",
+]
+ink-as-dependency = []
+
+[profile.release]
+panic = "abort"
+lto = true
+opt-level = "z"
+codegen-units = 1
+overflow-checks = false
