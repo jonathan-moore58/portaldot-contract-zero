@@ -1,0 +1,33 @@
+# Build flags that make LLVM emit WASM that PortalDot's 2021 validator accepts.
+#
+# Every flag here maps to a rule in the chain's own source:
+#
+#   -sign-ext / -bulk-memory / ...   wasmi-validation 0.4 only knows WASM MVP.
+#                                    Rust >= 1.70 turns sign-ext on by default,
+#                                    which produces i32.extend8_s and friends —
+#                                    instantly rejected. This is the second wall,
+#                                    the one you only hit after beating the
+#                                    cargo-contract dependency wall.
+#
+#   --import-memory                  prepare.rs::ensure_no_internal_memory —
+#                                    a contract may not declare its own memory,
+#                                    it must import env.memory.
+#
+#   --max-memory=1048576             get_memory_limits: "Maximum number of pages
+#                                    should be always declared", and must be
+#                                    <= schedule.limits.memory_pages (16 pages).
+#                                    16 * 65536 = 1048576.
+#
+#   --no-entry                       no _start; the chain calls deploy/call.
+
+[target.wasm32-unknown-unknown]
+rustflags = [
+  "-C", "target-feature=-sign-ext,-bulk-memory,-nontrapping-fptoint,-reference-types,-multivalue,-simd128,-relaxed-simd,-extended-const",
+  "-C", "link-arg=--import-memory",
+  "-C", "link-arg=--max-memory=1048576",
+  "-C", "link-arg=--no-entry",
+  "-C", "link-arg=-zstack-size=32768",
+]
+
+[build]
+target = "wasm32-unknown-unknown"

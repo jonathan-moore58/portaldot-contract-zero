@@ -1,0 +1,19 @@
+{
+  "name": "portaldot-contract-zero",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Deploy the first smart contract on PortalDot (pallet-contracts 3.0.0)",
+  "scripts": {
+    "selftest": "python tools/selftest.py",
+    "build": "bash scripts/build-minimal.sh",
+    "deploy:dry": "node scripts/deploy.mjs --wasm out/minimal.wasm --suri //Alice --dry-run",
+    "deploy:dev": "node scripts/deploy.mjs --wasm out/minimal.wasm --suri //Alice"
+  },
+  "dependencies": {
+    "@polkadot/api": "^10.13.1",
+    "@polkadot/keyring": "^12.6.2",
+    "@polkadot/util": "^12.6.2",
+    "@polkadot/util-crypto": "^12.6.2"
+  }
+}

@@ -1,0 +1,9 @@
+# Never commit keys. The account file holds a mnemonic in plain text.
+.account.json
+*.key
+.env
+
+node_modules/
+out/
+contracts/*/target/
+target/
