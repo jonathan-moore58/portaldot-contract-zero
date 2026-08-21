@@ -1,4 +1,6 @@
 # Never commit keys. The account file holds a mnemonic in plain text.
+# HANDOFF.md holds strategy and private conversation state.
+HANDOFF.md
 .account.json
 *.key
 .env
