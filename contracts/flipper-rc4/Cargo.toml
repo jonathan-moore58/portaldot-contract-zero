@@ -3,6 +3,10 @@ name = "flipper-rc4"
 version = "0.1.0"
 edition = "2021"
 publish = false
+authors = ["Jonathan Moore <jg.writes302@gmail.com>"]
+license = "MIT"
+# cargo-contract's metadata step requires at least one author and panics without
+# one: "must have at least one author".
 description = "ink! 3.0.0-rc4 flipper — the release that matches a mid-2021 pallet-contracts"
 
 [dependencies]
@@ -17,9 +21,13 @@ ink_storage = { version = "=3.0.0-rc4", default-features = false }
 ink_lang = { version = "=3.0.0-rc4", default-features = false }
 
 scale = { package = "parity-scale-codec", version = "=2.3.1", default-features = false, features = ["derive", "full"] }
-scale-info = { version = "=1.0.0", default-features = false, features = ["derive"], optional = true }
+# ink! rc4 declares `scale-info ^0.6`. Pinning 1.0.0 builds the wasm fine —
+# ink_metadata is optional and only enters under `std` — but the metadata
+# build then sees two scale-info versions and cargo-contract refuses:
+#   ERROR: Mismatching versions of `scale-info` were found!
+scale-info = { version = "=0.6.0", default-features = false, features = ["derive"], optional = true }
 parity-scale-codec-derive = "=2.3.1"
-scale-info-derive = "=1.0.0"
+scale-info-derive = "=0.6.1"
 
 # ink!'s own internal crates are loosely bound to each other too, so the
 # resolver mixes releases and the macro fails against an IR crate from a

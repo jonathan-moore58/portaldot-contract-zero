@@ -1,0 +1,21 @@
+#!/bin/sh
+# rustc wrapper that forces MVP-only WASM.
+#
+# cargo-contract overwrites RUSTFLAGS, so target features cannot be passed that
+# way. Without this the build dies in post-processing with "Unknown opcode 252"
+# — 0xFC, bulk-memory — because cargo-contract's parity-wasm is MVP-only,
+# exactly like the chain's wasmi-validation. That is not a coincidence: both are
+# from 2021, which also means a module cargo-contract accepts is one the chain
+# will accept.
+#
+# RUSTC_WRAPPER sits underneath RUSTFLAGS: cargo runs every rustc through it,
+# whatever flags the tool above has set. The flag is added only for the wasm
+# target, since target-cpu=mvp is not a valid CPU for a host build.
+for a in "$@"; do
+  case "$a" in
+    wasm32-unknown-unknown|--target=wasm32-unknown-unknown)
+      exec "$@" -C target-cpu=mvp
+      ;;
+  esac
+done
+exec "$@"

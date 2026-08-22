@@ -36,22 +36,54 @@ WORKDIR /work
 CMD ["cargo", "build", "--release"]
 
 # ------------------------------------------------------------------ ink3 ----
-# Kept for reference only. cargo-contract 0.17 does install here — `--locked`
-# is what makes that work — but it is not the path that ends in a deployable
-# contract, because building a contract resolves the *contract's* dependency
-# graph fresh, and modern transitive crates publish edition-2024 manifests that
-# a 2023 Cargo cannot parse.
+# cargo-contract is only an orchestrator: it shells out to `cargo` and then
+# builds a metadata crate. That lets us split the problem in two.
 #
-# The working recipe lives in scripts/build-ink.sh and needs no image of its
-# own. See that script for why each piece is there.
-FROM rust:1.69.0-slim AS ink3
+#   stage ccbuild   compiles cargo-contract (2021 code) on a 2023 Rust, which is
+#                   the newest toolchain it still builds on. `--locked` is what
+#                   makes that work — without it Cargo re-resolves its
+#                   dependencies to releases that no longer build.
+#
+#   stage ink3      hands that binary a 2025 nightly to drive, so the *contract's*
+#                   dependency graph is resolved by a Cargo new enough to read
+#                   edition-2024 manifests, while rustc still has the nightly
+#                   features ink! 3.x needs.
+#
+# The payoff over a hand-driven cargo build is metadata: `cargo contract build`
+# emits the .contract bundle with the ABI, which a plain wasm build cannot,
+# because the ABI comes from compiling the contract a second time for the host
+# and running it.
+FROM rust:1.69.0-slim AS ccbuild
 
-ARG INK_NIGHTLY=nightly-2022-08-11
+# cargo-contract must match the ink! release, not just be "old enough".
+# 0.17 generates a metadata crate that references ink_metadata::MetadataVersioned,
+# a type ink! 3.0.0-rc4 does not have. 0.13.0 shipped on 2021-07-22 — the same
+# day as rc4 — and generates the metadata crate rc4 actually exposes.
+ARG CARGO_CONTRACT_VERSION=0.13.0
 
-RUN apt-get update  && apt-get install -y --no-install-recommends binaryen git pkg-config libssl-dev build-essential  && rm -rf /var/lib/apt/lists/*
+RUN apt-get update  && apt-get install -y --no-install-recommends pkg-config libssl-dev build-essential ca-certificates  && rm -rf /var/lib/apt/lists/*
 
-RUN rustup toolchain install ${INK_NIGHTLY} --profile minimal  && rustup component add rust-src --toolchain ${INK_NIGHTLY}  && rustup target add wasm32-unknown-unknown --toolchain ${INK_NIGHTLY}
+RUN cargo install cargo-contract --version ${CARGO_CONTRACT_VERSION} --locked --root /out
 
-RUN cargo install cargo-contract --version 0.17.0 --locked
+
+FROM rust:slim AS ink3
+
+ARG INK_NIGHTLY=nightly-2025-03-01
+
+RUN apt-get update  && apt-get install -y --no-install-recommends binaryen libssl-dev ca-certificates  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ccbuild /out/bin/cargo-contract /usr/local/cargo/bin/cargo-contract
+
+RUN rustup toolchain install ${INK_NIGHTLY} --profile minimal -c rust-src  && rustup target add wasm32-unknown-unknown --toolchain ${INK_NIGHTLY}
+
+# cargo-contract overwrites RUSTFLAGS, so target features cannot be passed that
+# way — without this the build dies in post-processing with "Unknown opcode 252"
+# (0xFC, bulk-memory), because cargo-contract's parity-wasm is MVP-only, exactly
+# like the chain's validator. RUSTC_WRAPPER sits underneath RUSTFLAGS: cargo
+# runs every rustc through it. The flag is added only for the wasm target, since
+# target-cpu=mvp is not a valid CPU for a host build.
+COPY docker/rustc-mvp /usr/local/bin/rustc-mvp
+RUN chmod +x /usr/local/bin/rustc-mvp
+ENV RUSTC_WRAPPER=/usr/local/bin/rustc-mvp
 
 WORKDIR /work

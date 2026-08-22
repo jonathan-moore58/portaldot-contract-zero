@@ -4,7 +4,7 @@
 
 **Smart contracts work on PortalDot. Here is the toolchain that gets you there.**
 
-[Quick start](#quick-start) · [Why contracts fail](#why-contracts-fail) · [Reference](#reference) · [Blocked projects](#if-your-project-is-one-of-the-blocked-ones)
+[Quick start](#quick-start) · [Why contracts fail](#why-contracts-fail) · [Building with ink!](#building-with-ink) · [Reference](#reference) · [Blocked projects](#if-your-project-is-one-of-the-blocked-ones)
 
 </div>
 
@@ -93,11 +93,12 @@ Restoring the real ink! toolchain is still worth doing, and is tracked below.
 | `contracts/flipper-rc4/` | **A working ink! contract** — ink! 3.0.0-rc4 |
 | `contracts/flipper/` | ink! 3.4.0. Compiles and validates, but traps on chain — see below |
 | `scripts/build-minimal.sh` | Compile, repair, validate the raw contract |
-| `scripts/build-ink.sh` | Compile, lower, repair, validate an ink! contract |
+| `scripts/build-ink.sh` | Build an ink! contract with its metadata, and validate it |
 | `scripts/deploy.mjs` | `instantiate_with_code` with legacy `Compact<u64>` gas |
 | `scripts/call.mjs` | Call a contract and read its storage before and after |
 | `scripts/newaccount.mjs` | Generate an account without printing the mnemonic |
-| `Dockerfile` | Build environment for the raw contract |
+| `Dockerfile` | Build environments — `minimal` for the raw contract, `ink3` for ink! |
+| `docker/rustc-mvp` | `rustc` wrapper that forces MVP WASM out of a modern LLVM |
 
 ### portawasm
 
@@ -127,7 +128,10 @@ of which only becomes visible once the one in front of it is down.
 **1 — `cargo-contract` will not install.** The widely reported symptom. The fix
 is `--locked`: without it Cargo re-resolves the crate's transitive dependencies
 to current releases, which no longer build on the toolchain it pins. With it,
-`cargo install cargo-contract --version 0.17.0 --locked` completes.
+`cargo install cargo-contract --version 0.13.0 --locked --root /out` completes
+on a 2023-era Rust.
+
+The version matters as much as the flag — see [Metadata](#metadata-the-abi).
 
 **2 — the contract's own dependency graph will not resolve.** Building a
 contract resolves *its* dependencies fresh, and modern crates publish
@@ -156,8 +160,64 @@ features by default for `wasm32-unknown-unknown` — `bulk-memory`, `multivalue`
 `nontrapping-fptoint`, `reference-types`, `sign-ext` — and `wasmi-validation 0.4`
 knows none of them. `-C target-feature=-...` covers your own crates but not the
 precompiled `core`, so `core::slice::copy_from_slice` still emits `memory.copy`.
-Binaryen's `--llvm-memory-copy-fill-lowering` and `--signext-lowering` rewrite
-those into MVP equivalents after the build.
+
+Three things fix this, in ascending order of how well they hold:
+
+- Binaryen's `--llvm-memory-copy-fill-lowering` and `--signext-lowering` rewrite
+  the post-MVP instructions into MVP equivalents after the build. Works, but it
+  is a repair, and it runs after `cargo-contract` has already rejected the file.
+- `-Z build-std` recompiles `core` with your target features. It works for the
+  raw contract but collides with ink! rc4 (`duplicate lang item in core`).
+- **`-C target-cpu=mvp`** turns every post-MVP feature off at the LLVM level,
+  precompiled `core` included. This is what the image uses.
+
+`cargo-contract` overwrites `RUSTFLAGS`, so the flag cannot be passed that way.
+`RUSTC_WRAPPER` sits underneath it — Cargo runs every `rustc` invocation through
+the wrapper — so [`docker/rustc-mvp`](docker/rustc-mvp) appends the flag, and
+only for the wasm target, since `mvp` is not a valid CPU for a host build.
+
+### Metadata (the ABI)
+
+`scripts/build-ink.sh` emits three files into `out/`:
+
+| File | What it is |
+|---|---|
+| `ink.wasm` | the code the chain runs |
+| `ink.metadata.json` | the ABI — constructors, messages, selectors, storage layout |
+| `ink.contract` | both together, for tools that take a bundle |
+
+Metadata is what makes a contract usable by anything other than its author. Hand-rolled
+builds cannot produce it; only `cargo contract build` can, because it compiles the
+contract a second time for the host and runs it to emit its own description.
+
+That second compile is why the `cargo-contract` version has to match the ink!
+version, not merely be old enough. **0.13.0**, released 2021-07-22 — the same day
+as rc4 — generates a metadata crate against the API rc4 exposes. 0.17 generates one
+referencing `ink_metadata::MetadataVersioned`, a type rc4 does not have:
+
+```
+error[E0432]: unresolved import `ink_metadata::MetadataVersioned`
+```
+
+The image builds `cargo-contract` in its own stage on Rust 1.69, then hands the
+binary to a 2025 nightly to drive. The 2022 tool and the 2025 toolchain never
+have to be the same thing.
+
+One useful side effect: `cargo-contract 0.13`'s `parity-wasm` is MVP-only, exactly
+like the chain's `wasmi-validation`. Both are 2021 code. A post-MVP instruction
+fails the build with `Unknown opcode 252` rather than reaching the chain — the
+toolchain rejects what the chain would have rejected, before you spend anything.
+
+Selectors from the generated metadata match the hand-computed
+`blake2_256(name)[..4]`, which is worth checking once if you are calling a
+contract by raw selector:
+
+| Message | Selector |
+|---|---|
+| `new` | `0x9bae9d5e` |
+| `default` | `0xed4b9d1b` |
+| `flip` | `0x633aa551` |
+| `get` | `0x2f865bd9` |
 
 ### Which ink! version
 
@@ -268,7 +328,7 @@ Issues and PRs welcome, including against your repo if that is easier.
 
 ## Verification
 
-Both contracts are deployed and executing on the public dev node.
+Three contracts are deployed and executing on the public dev node.
 
 **Raw `seal0` contract** — `contracts/minimal`
 
@@ -278,7 +338,7 @@ code_hash   0x33fe817ca2d745df454196acc5b17a1920e1fe617379db57691ee9537eeba0eb
 size        405 bytes        endowment 20 POT     fee 0.0554 POT
 ```
 
-**ink! contract** — `contracts/flipper-rc4`
+**ink! contract, hand-driven build** — `contracts/flipper-rc4`
 
 ```
 contract    5FpP1cf9Zuc2nwMkNfFirU66UkHrRXHHTaXUGDKyvBSCU22g
@@ -286,14 +346,24 @@ code_hash   0x99dc4425d97c0609823689ca7cf934d5ca63b1dd2cf98e4d29eabde6011d2405
 size        10,885 bytes     endowment 30 POT
 ```
 
+**ink! contract, `cargo contract build`, with metadata** — the same source
+
+```
+contract    5CZxNAKbijnQnd1GTHcyEkjPAQo3apxMzo3biqWRJFQSv43b
+size        1,712 bytes      endowment 30 POT
+```
+
+Same contract, one sixth the size, and this one ships an ABI. `portawasm fix` is
+not needed on it either — `cargo-contract` strips the surplus exports itself.
+
 Chain state before this work and after:
 
 | | Before | After |
 |---|---|---|
-| `Contracts.PristineCode` | 0 | **2** |
-| `Contracts.ContractInfoOf` | 0 | **2** |
+| `Contracts.PristineCode` | 0 | **3** |
+| `Contracts.ContractInfoOf` | 0 | **3** |
 
-And both run, not just deploy:
+And they run, not just deploy:
 
 ```
 raw contract   storage at key 0x00…00     0  ->  1   after one contracts.call
@@ -329,6 +399,7 @@ chain's source, and the chain remains the authority.
 - [x] Deployed to the public dev node
 - [x] Called, and it changed state
 - [x] **ink! builds, deploys and runs** — ink! 3.0.0-rc4, via `scripts/build-ink.sh`
+- [x] **Metadata** — `cargo contract build` produces the ABI and the `.contract` bundle
 - [ ] Mainnet deployment
 - [ ] Metadata (ABI) generation, so `@polkadot/api-contract` clients can be used
 

@@ -1,30 +1,26 @@
 #!/usr/bin/env bash
-# Build an ink! contract for PortalDot's pallet-contracts 3.0.0.
+# Build an ink! contract for PortalDot, with metadata.
 #
-#   bash scripts/build-ink.sh [contract-dir]      default: contracts/flipper-rc4
+#   bash scripts/build-ink.sh [contract-dir]     default: contracts/flipper-rc4
 #
-# The recipe, and why each piece is here:
+# Produces target/ink/{*.wasm, metadata.json, *.contract} and validates the
+# module against the chain's rules before you spend anything.
 #
-#   nightly-2025-03-01   The only window that works. Its Cargo understands the
-#                        edition-2024 manifests that modern transitive deps
-#                        publish, and its rustc still has the nightly features
-#                        (alloc_error_handler, core_intrinsics) that ink! 3.x
-#                        needs. Older toolchains fail on the manifests; stable
-#                        fails on the features.
+# Every version here is matched to the same era, and none of it is arbitrary:
 #
-#   no -Z build-std      Rebuilding core pulls host proc-macro crates into the
-#                        same graph and you get "duplicate lang item in core".
-#                        Not needed: binaryen lowers the bulk-memory ops after
-#                        the fact.
+#   pallet-contracts 3.0.0   what the chain runs — still has the rent model
+#   ink! 3.0.0-rc4           2021-07-22, the last line built for a rent-era pallet
+#   cargo-contract 0.13.0    2021-07-22, same day. 0.17 generates a metadata crate
+#                            referencing ink_metadata::MetadataVersioned, which
+#                            rc4 does not have
+#   scale-info 0.6           what rc4 declares (^0.6)
+#   nightly-2025-03-01       the only window whose Cargo reads edition-2024
+#                            manifests while rustc still has the nightly features
+#                            ink! 3.x needs
 #
-#   binaryen lowering    Modern LLVM enables five post-MVP wasm features by
-#                        default, and this chain's validator (wasmi-validation
-#                        0.4) knows only the MVP. --llvm-memory-copy-fill-lowering
-#                        and --signext-lowering rewrite those instructions into
-#                        MVP equivalents.
-#
-#   portawasm fix        rustc still exports __data_end and __heap_base, and
-#                        prepare.rs accepts only deploy and call.
+# The image is built in two stages so the 2022 tool and the 2025 toolchain never
+# have to be the same thing: cargo-contract is compiled on a 2023 Rust, then
+# handed a 2025 nightly to drive. See the Dockerfile.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,8 +28,7 @@ cd "$ROOT"
 
 DIR="${1:-contracts/flipper-rc4}"
 NAME="$(basename "$DIR" | tr '-' '_')"
-NIGHTLY="nightly-2025-03-01"
-BINARYEN="version_123"
+IMAGE="portaldot-ink:ink3"
 OUT="$ROOT/out"
 mkdir -p "$OUT"
 
@@ -43,41 +38,30 @@ else
   MOUNT="$ROOT"
 fi
 
-echo "==> compiling $DIR with $NIGHTLY"
-MSYS_NO_PATHCONV=1 docker run --rm -v "$MOUNT:/work" -w "/work/$DIR" rust:slim sh -c "
-  set -e
-  rustup toolchain install $NIGHTLY --profile minimal -c rust-src >/dev/null 2>&1
-  rustup target add wasm32-unknown-unknown --toolchain $NIGHTLY >/dev/null 2>&1
-  rustup run $NIGHTLY cargo build --release --target wasm32-unknown-unknown --no-default-features
-"
-
-RAW="$DIR/target/wasm32-unknown-unknown/release/$NAME.wasm"
-[ -f "$RAW" ] || { echo "no wasm at $RAW" >&2; exit 1; }
-cp "$RAW" "$OUT/ink.raw.wasm"
+echo "==> building image (first run takes a while — cargo-contract is compiled from source)"
+MSYS_NO_PATHCONV=1 docker build --target ink3 -t "$IMAGE" "$MOUNT"
 
 echo
-echo "==> lowering post-MVP instructions to MVP"
-MSYS_NO_PATHCONV=1 docker run --rm -v "$MOUNT:/work" -w /work debian:bookworm-slim sh -c "
-  set -e
-  apt-get update -qq >/dev/null 2>&1
-  apt-get install -y -qq curl ca-certificates >/dev/null 2>&1
-  curl -sL https://github.com/WebAssembly/binaryen/releases/download/$BINARYEN/binaryen-$BINARYEN-x86_64-linux.tar.gz -o /tmp/b.tgz
-  tar xzf /tmp/b.tgz -C /tmp
-  /tmp/binaryen-$BINARYEN/bin/wasm-opt out/ink.raw.wasm -o out/ink.mvp.wasm \
-    --llvm-memory-copy-fill-lowering --signext-lowering \
-    --disable-bulk-memory --disable-sign-ext --disable-nontrapping-float-to-int \
-    --disable-reference-types --disable-multivalue --disable-simd -Oz
-"
+echo "==> building contract"
+MSYS_NO_PATHCONV=1 docker run --rm -v "$MOUNT:/work" -w "/work/$DIR" "$IMAGE" \
+  cargo +nightly-2025-03-01 contract build --release
 
-echo
-echo "==> repairing exports"
-python tools/portawasm.py fix "$OUT/ink.mvp.wasm" "$OUT/ink.wasm"
+ART="$DIR/target/ink"
+[ -f "$ART/$NAME.wasm" ] || { echo "no wasm at $ART/$NAME.wasm" >&2; exit 1; }
+
+cp "$ART/$NAME.wasm" "$OUT/ink.wasm"
+cp "$ART/metadata.json" "$OUT/ink.metadata.json" 2>/dev/null || true
+cp "$ART/$NAME.contract" "$OUT/ink.contract" 2>/dev/null || true
 
 echo
 echo "==> validating against the chain's rules"
 python tools/portawasm.py check "$OUT/ink.wasm"
 
-echo "artifact: $OUT/ink.wasm"
+echo "artifacts:"
+echo "  $OUT/ink.wasm            the code"
+echo "  $OUT/ink.metadata.json   the ABI"
+echo "  $OUT/ink.contract        both, for tools that take a bundle"
 echo
-echo "deploy it with the constructor selector, e.g. new(false):"
-echo "  node scripts/deploy.mjs --wasm out/ink.wasm --dev Alice --data 0x9bae9d5e00 --endowment 30 --gas 500000000000"
+echo "deploy with the constructor selector — new(false) on the flipper:"
+echo "  node scripts/deploy.mjs --wasm out/ink.wasm --dev Alice \\"
+echo "       --data 0x9bae9d5e00 --endowment 30 --gas 500000000000"
