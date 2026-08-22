@@ -267,11 +267,24 @@ chain actually enforces.
 
 | | |
 |---|---|
-| `DepositPerContract` | 6.87 POT |
-| `TombstoneDeposit` | 6.87 POT |
+| `DepositPerContract` | 7.35 POT |
+| `TombstoneDeposit` | 7.35 POT |
 | `DepositPerStorageByte` | 0.06 POT |
 | `DepositPerStorageItem` | 0.15 POT |
+| `Balances.ExistentialDeposit` | 1 POT |
 | Rent | `RentFraction × (deposit − free_balance)` — a contract funded above its deposit pays none |
+
+**Minimum endowment.** `instantiate_with_code` needs strictly more than the
+subsistence threshold, `ExistentialDeposit + TombstoneDeposit` = 8.35 POT:
+
+```
+8.35 POT → NewContractNotFunded      (Module index 13, error 9)
+8.36 POT → instantiates
+```
+
+Worth knowing because `NewContractNotFunded` reads like a problem with your
+module, and it is not — the wasm never runs. Use 20–30 POT in practice; a
+contract sitting at the floor is immediately rent-evictable.
 
 ### Schedule limits
 
